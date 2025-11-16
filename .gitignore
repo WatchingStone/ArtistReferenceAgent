@@ -1,0 +1,11 @@
+# 上传git时忽略其中文件
+.env
+.idea/
+lib_backup
+test
+杂项
+开发记录.md
+model/
+项目备份/
+__pycache__/
+*.pyc
