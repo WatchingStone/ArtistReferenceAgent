@@ -31,14 +31,6 @@ class KeywordExtractor:
                 self.api_url = self.llm_config.get(self.llm_name, {}).get("api_url",  "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation")
         elif mod == "jieba":
             pass
-            # jieba_cache_path = config.get('jieba_cache_path', "./cache/jieba.txt")
-            # os.makedirs(os.path.dirname(jieba_cache_path), exist_ok=True)
-            # if not os.path.exists(jieba_cache_path):
-            #     with open(jieba_cache_path, 'w', encoding='utf-8') as f:
-            #         f.write("")
-            # jieba.set_dictionary(jieba_cache_path)  # 如果需要自定义词典，设置jieba字典缓存
-            # jieba.default_cache_file = config.get("jieba_running_cache_path", "./cache/jieba.cache")
-            # jieba.initialize()  # 初始化
 
     def load_local_model(self):
         """加载本地模型"""
@@ -282,51 +274,3 @@ class KeywordExtractor:
     def filter_json(self, json_dict : Dict[str, Any]) -> Dict[str, Any]:
         """过滤json结果，将内容为空的大类过滤，或进行其他处理"""
         return {k: v for k, v in json_dict.items() if v}
-
-
-
-        # prompt = f"""请从文本【{input_text}】中提取关键词，请按照以下分类提取关键词，并返回严格的JSON格式：
-        #             {json.dumps(template, ensure_ascii=False, indent=2)}
-        #             要求：
-        #             1.优先使用上述分类中的大类进行分析
-        #             2.每个大类下可以有多个匹配的小类
-        #             3.如果某大类没有匹配的关键词，忽略该大类
-        #             4.只返回json，不要其他任何内容"""
-
-        # prompt = f"""目标文本：{input_text}，请从文本中提取关键词。
-        #             1. 请只返回JSON，不要其他文字
-        #             2. 请只提取文本中存在的关键词
-        #             3. 请没有匹配的分类可以省略
-        #             4. 请按以下JSON格式返回结果：
-        #             {json.dumps(template, ensure_ascii=False, indent=2)}
-        #             """
-
-        # prompt = f"""请从以下文本中提取关键词并按照“大类-小类”的形式分类。严格按照指定JSON格式输出，不要添加任何解释性文字。
-        #
-        # 文本内容：{input_text}
-        #
-        # 输出要求：
-        # - 仅返回一个JSON对象
-        # - 不要添加编号、说明或其他文字
-        # - 只包含文本中存在的关键词
-        # - 没有匹配关键词的大类请忽略，不要输出为空数组
-        #
-        # JSON格式的分类模板：
-        # {json.dumps(template, ensure_ascii=False, indent=2)}
-        #
-        # 请开始提取："""
-
-        # prompt = f"""请从以下文本中提取关键词并按照“大类-小类”的形式分类。严格按照指定JSON格式输出，不要添加任何解释性文字。
-        #
-        # 文本内容：{input_text}
-        #
-        # 输出要求：
-        # - 仅返回一个JSON对象，不要使用```json等代码块标记
-        # - 不要添加编号、说明或其他文字
-        # - 只包含文本中存在的关键词
-        # - 没有匹配关键词的大类请忽略，不要输出为空数组
-        #
-        # JSON格式的分类模板：
-        # {json.dumps(template, ensure_ascii=False, indent=2)}
-        #
-        # 请开始提取："""

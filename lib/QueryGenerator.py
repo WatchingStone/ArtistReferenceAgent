@@ -19,13 +19,7 @@ class QueryGenerator:
         query_list = []
         categories = list(keywords.keys())
 
-
-
-
         keywords = self.translator.translate(keywords, "en")                # 默认开启关键词翻译
-
-
-
 
         # 随机选择一个键值对，生成多组不同的查询组合
         for _ in range(self.query_generate_max):

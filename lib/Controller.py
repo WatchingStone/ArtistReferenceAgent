@@ -12,10 +12,8 @@ class Controller:
     def __init__(self, config : Dict[str, Any], feature_tags : Dict[str, Any], proxy = None):
         self.config = config
         self.query_generator = QueryGenerator(config=config, proxy=proxy)
-        # self.keyword_extractor = KeywordExtractor(config=config, feature_tags=feature_tags, mod='llm')
         self.keyword_extractor = KeywordExtractor(config=config, feature_tags=feature_tags, mod='jieba')
         self.image_searcher_factory = ImageSearchFactory(config=config, proxy=proxy)
-        # self.image_searchers = self.image_searcher_factory.get_all_avaliable_sites()
         self.image_searchers = [self.image_searcher_factory.get_searcher("huabanwang")]     # 临时调试，固定使用花瓣网
 
         # 各类当前状态
