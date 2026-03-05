@@ -15,6 +15,7 @@ import json
 class BaseImageSearch(abc.ABC):
     '''图片搜索类基类，定义抽象接口'''
     def __init__(self, config : Dict[str, Any], proxy=None, timeout=None):
+        self.log_prefix = "BaseImageSearch"
         self.config = config
         self.api_key = config.get('api_key', '')         # 从配置获取API密钥
         self.enabled = config.get('enabled', False)
@@ -27,6 +28,10 @@ class BaseImageSearch(abc.ABC):
 
         self.proxy = proxy
 
+    def _log(self, function_name: str = "None", data: str = "-"):
+        '''格式化输出'''
+        print(f">> >> [{self.log_prefix}]-[{function_name}]: {data}")
+
     @abc.abstractmethod
     def search(self, query : List[str]) -> List[str]:
         '''执行图片搜索，返回图片url列表'''
@@ -36,8 +41,8 @@ class BaseImageSearch(abc.ABC):
         '''通用请求方法，处理api调用'''
         if not self.enabled:
             raise ValueError(f"搜索网址 【{self.__class__.__name__}】 当前不可用")
-
-        print(f"尝试访问url：{url}")
+        
+        self._log('_make_request', f"尝试访问 url：{url}")
         start_time = time.time()
 
         try:
@@ -57,8 +62,8 @@ class BaseImageSearch(abc.ABC):
                     proxies=self.proxy
                 )
 
-            response.raise_for_status()     # 检查HTTP状态码（非200则抛出异常
-            print(f"页面加载完成，用时：{time.time() - start_time}")
+            response.raise_for_status()     # 检查 HTTP 状态码（非 200 则抛出异常
+            self._log('_make_request', f"页面加载完成，用时：{time.time() - start_time}")
             return response.json()
         except Exception as e:
             raise RuntimeError(f"API 请求错误：{str(e)}") from e
@@ -80,8 +85,8 @@ class BaseImageSearch(abc.ABC):
         chrome_options.add_argument(f'--referer={referer}')     # 设置Referer头，形如'--referer=https://huaban.com/'
 
         driver = None
-
-        print(f"尝试访问url：{url}")
+        
+        self._log('_get_url_response', f"尝试访问 url：{url}")
         start_time = time.time()
 
         try:
@@ -103,7 +108,7 @@ class BaseImageSearch(abc.ABC):
             print(f"页面加载完成，用时：{time.time() - start_time}")
             return driver
         except TimeoutException:
-            print(f"页面加载超时：{url}")
+            self._log('_get_url_response', f"页面加载超时：{url}")
             return None
         except Exception as e:
             raise RuntimeError(f"网页请求错误：{str(e)}")
@@ -114,21 +119,25 @@ class BaseImageSearch(abc.ABC):
 
     def _debug_response(self, response):
         """调试输出响应信息并保存"""
-        print(f"响应状态码: {response.status_code}")
-        print(f"响应头: {response.headers}")
-        print(f"响应内容长度: {len(response.text)}")
+        self._log('_debug_response', f"响应状态码：{response.status_code}")
+        self._log('_debug_response', f"响应头：{response.headers}")
+        self._log('_debug_response', f"响应内容长度：{len(response.text)}")
         # 保存完整响应内容到文件
         import urllib.parse
         # filename = f"response_{urllib.parse.quote(url, safe='')}.html"
         filename = f"response_{self.__class__.__name__}_{time.time()}.html"
         with open(filename, 'w', encoding='utf-8') as f:
             f.write(response.text)
-        print(f"响应内容已保存到文件: {filename}")
+        self._log('_debug_response', f"响应内容已保存到文件：{filename}")
 
 
 
 class PixabaySearch(BaseImageSearch):
-    '''Pixabay中的图片搜索'''
+    '''Pixabay 中的图片搜索'''
+    def __init__(self, config: Dict[str, Any], proxy=None, timeout=None):
+        super().__init__(config, proxy, timeout)
+        self.log_prefix = "PixabaySearch"
+    
     def search(self, query : List[str]) -> List[str]:
         url = url = self.config.get("url", "https://pixabay.com/api/")
         params = {
@@ -148,7 +157,11 @@ class PixabaySearch(BaseImageSearch):
 
 
 class UnsplashSearch(BaseImageSearch):
-    '''Unsplash中的图片搜索'''
+    '''Unsplash 中的图片搜索'''
+    def __init__(self, config: Dict[str, Any], proxy=None, timeout=None):
+        super().__init__(config, proxy, timeout)
+        self.log_prefix = "UnsplashSearch"
+    
     def search(self, query : str) -> List[str]:
         url = self.config.get("url", "https://api.unsplash.com/search/photos")
         params = {
@@ -161,7 +174,11 @@ class UnsplashSearch(BaseImageSearch):
 
 
 class PexelsSearch(BaseImageSearch):
-    '''Pexels中的图片搜索'''
+    '''Pexels 中的图片搜索'''
+    def __init__(self, config: Dict[str, Any], proxy=None, timeout=None):
+        super().__init__(config, proxy, timeout)
+        self.log_prefix = "PexelsSearch"
+    
     def search(self, query : str) -> List[str]:
         url = self.config.get("url", "https://api.pexels.com/v1/search")
         params = {
@@ -176,51 +193,92 @@ class PexelsSearch(BaseImageSearch):
 
 
 class HuabanwangSearch(BaseImageSearch):
-    '''花瓣网中的图片搜索，由于花瓣网禁止爬虫抓取所有子网页，所以原则上不能用花瓣网搜索。本方法使用网页url直接模拟访问的方式实现，不使用self.api_key'''
+    '''花瓣网中的图片搜索，由于花瓣网禁止爬虫抓取所有子网页，所以原则上不能用花瓣网搜索。本方法使用网页 url 直接模拟访问的方式实现，不使用 self.api_key'''
+    def __init__(self, config: Dict[str, Any], proxy=None, timeout=None):
+        super().__init__(config, proxy, timeout)
+        self.log_prefix = "HuabanwangSearch"
+    
     def search(self, query) -> List[str]:
         # 使用手动构造url的方式直接访问搜索页面，获取url模版，其中“filter_ids”项后面的两个参数分别表示“屏蔽ai结果”和“不看素材（只看原图）”
         # url中的“q={}”项是需要替换的搜索关键词项，用query替换"{}"
         url = self.config.get("url", "https://huaban.com/search?q={}&sort=all&type=pin&filter_ids=is_ai-5342747.6124374.6124380%7Eis_material-5342747.6124373.6124375")
         query_str = self._query_convert(query)
-        url = url.format(query_str)     # 替换url中的"{}"项为query
-
-        print("正在搜索【花瓣网】")
-        print(json.dumps({
+        url = url.format(query_str)     # 替换 url 中的"{}"项为 query
+        
+        self._log('search', "正在搜索【花瓣网】")
+        self._log('search', json.dumps({
             "本次使用搜索器": str(self.__class__.__name__),
             "搜索关键词": query_str,
-            "搜索url": url,
+            "搜索 url": url,
         }, indent=4, ensure_ascii=False))
 
         try:
             # 访问url，获取网页内容
             driver = self._get_url_response(url=url)
             if driver is None:
-                print(f"访问花瓣网url出错：{url}")
+                self._log('search', f"访问花瓣网 url 出错：{url}")
                 return []
 
             image_urls = []
-            img_elements = driver.find_elements(By.CSS_SELECTOR, 'img.transparent-img-bg.hb-image')  # 找到所有img元素，类别为“transparent-img-bg hb-image”
-            print(f"找到的图片数量: {len(img_elements)}")
+            # 尝试多种CSS选择器来找到图片元素
+            selectors = [
+                'img.transparent-img-bg.hb-image',
+                'img.hb-image', 
+                'img[data-src]',
+                'img[src*="huaban.com"]'
+            ]
+            
+            img_elements = []
+            for selector in selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    if elements:
+                        img_elements = elements
+                        self._log('search', f"使用选择器 '{selector}' 找到图片数量：{len(elements)}")
+                        break
+                except Exception as e:
+                    self._log('search', f"选择器 '{selector}' 查找失败：{e}")
+                    continue
+            
+            if not img_elements:
+                self._log('search', "未能找到任何图片元素")
+                # 尝试获取页面源码进行调试
+                page_source = driver.page_source[:1000]  # 只获取前 1000 字符
+                self._log('search', f"页面源码预览：{page_source}")
+                return []
+                
+            print(f"总共找到的图片数量: {len(img_elements)}")
 
-            for img in img_elements:             # 遍历img元素的前self.max_results个元素
-                print(f'img src: {img.get_attribute("src")}')
+            for img in img_elements:             # 遍历 img 元素的前 self.max_results 个元素
+                self._log('search', f'img src: {img.get_attribute("src")}')
+                srcset = img.get_attribute('srcset')
+                # print(f'img srcset: {srcset}')
 
                 if len(image_urls) >= self.max_results:
                     break
-                if img.get_attribute('srcset'):
-                    srcset = img.get_attribute('srcset')
-                    if srcset and srcset.startswith('https://gd-hbimg.huaban.com/'):
+                
+                # 检查srcset属性
+                if srcset:
+                    # 同时检查两种可能的域名
+                    if srcset.startswith('https://gd-hbimg.huaban.com/') or srcset.startswith('https://gd-hbimg-edge.huaban.com/'):
                         img_url = srcset.split(' ')[0]
                         image_urls.append(img_url)
+                        self._log('search', f'添加图片 URL: {img_url}')
+                # 如果没有srcset，检查src属性
+                elif img.get_attribute('src'):
+                    src = img.get_attribute('src')
+                    if src.startswith('https://gd-hbimg.huaban.com/') or src.startswith('https://gd-hbimg-edge.huaban.com/'):
+                        image_urls.append(src)
+                        self._log('search', f'添加图片 URL: {src}')
             return image_urls
         except Exception as e:
-            print(f"访问花瓣网url出现错误：{url}")
-            print(str(e))
+            self._log('search', f"访问花瓣网 url 出现错误：{url}")
+            self._log('search', str(e))
             return []
 
     def _query_convert(self, query : List[str]) -> str:
-        t = '+'.join(query)
-        return '+'.join(query)
+        t = [q.replace(' ', '+') for q in query]
+        return '+'.join(t)
 
 class ImageSearchFactory:
     '''图片搜索器管理类，配置管理搜索器'''

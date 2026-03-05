@@ -15,12 +15,20 @@
   "single_query_by_many_categories": 3,
   "single_query_by_many_element_per_category": 2,
 
-  "similarity_threshold": 0.1,
-
   "llm_name": "local_model",
-  "local_llm_name": "gemma3:1b",
+  "local_llm_name": "deepseek-r1:1.5b",
   "llm_sites": {
     "local_model": {
+      "deepseek-r1:7b": {
+        "model_name": "deepseek-r1:7b",
+        "model_path": "D:/Ollama/models",
+        "api_url": "http://localhost:11434/api/generate"
+      },
+      "deepseek-r1:1.5b": {
+        "model_name": "deepseek-r1:1.5b",
+        "model_path": "D:/Ollama/models",
+        "api_url": "http://localhost:11434/api/generate"
+      },
       "gemma3:1b": {
         "model_name": "gemma3:1b",
         "model_path": "D:/Ollama/models",

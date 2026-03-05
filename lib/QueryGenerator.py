@@ -6,25 +6,33 @@ from lib.TagTranslator import TagTranslator
 
 class QueryGenerator:
     def __init__(self, config, proxy=None):
+        self.log_prefix = "QueryGenerator"
         self.config = config
         self.query_generate_max = config.get("single_query_generate_max", 5)
         self.max_categories = config.get("single_query_by_many_categories", 3)
         self.max_elements_per_category = config.get("single_query_by_many_element_per_category", 2)
         self.translator = TagTranslator(config, proxy=proxy)
 
+    def _log(self, function_name: str = "None", data: str = "-"):
+        '''格式化输出'''
+        print(f">> >> [{self.log_prefix}]-[{function_name}]: {data}")
+
     def generate_query(self, keywords : Dict[str, Any]) -> List[List[str]]:
         """
         根据关键词生成查询语句，后续需要考虑翻译问题
         """
+        self._log('generate_query', f"开始生成查询，关键词类别：{list(keywords.keys())}")
         query_list = []
         categories = list(keywords.keys())
 
-        keywords = self.translator.translate(keywords, "en")                # 默认开启关键词翻译
+        # keywords = self.translator.translate(keywords, "en")                # "cn"为中文，"en"为英文
 
         # 随机选择一个键值对，生成多组不同的查询组合
         for _ in range(self.query_generate_max):
             query_elements = self.generate_single_query(keywords, categories)
             query_list.append(query_elements)
+        
+        self._log('generate_query', f"生成了 {len(query_list)} 条查询组合")
         return query_list
 
 
@@ -38,6 +46,7 @@ class QueryGenerator:
         # 随机选择几个大类
         num_categories = min(random.randint(2, self.max_categories), len(categories))
         select_categories = random.sample(categories, num_categories)
+        self._log('generate_single_query', f"选择了 {num_categories} 个类别：{select_categories}")
 
         # 从这些大类中随机选择几个元素
         query_elements = []
@@ -47,4 +56,6 @@ class QueryGenerator:
                 num_elements = min(random.randint(1, self.max_elements_per_category), len(e))
                 selecetted_elements = random.sample(e, num_elements)
                 query_elements.extend(selecetted_elements)
+        
+        self._log('generate_single_query', f"生成的查询元素：{query_elements}")
         return query_elements

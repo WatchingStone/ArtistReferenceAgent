@@ -1,0 +1,5 @@
+{
+  "model_dir": "./model",
+  "text_model_id": "IDEA-CCNL/Taiyi-CLIP-Roberta-102M-Chinese",
+  "image_model_id": "openai/clip-vit-base-patch32"
+}

@@ -11,6 +11,7 @@ import os
 
 class KeywordExtractor:
     def __init__(self, config : Dict[str, Any], feature_tags : Dict[str, List[str]], mod="jieba"):
+        self.log_prefix = "KeywordExtractor"
         self.mod = mod
         self.config = config
         self.llm_config = config.get("llm_sites", {})
@@ -32,15 +33,19 @@ class KeywordExtractor:
         elif mod == "jieba":
             pass
 
+    def _log(self, function_name: str = "None", data: str = "-"):
+        '''格式化输出'''
+        print(f">> [{self.log_prefix}]-[{function_name}]: {data}")
+
     def load_local_model(self):
         """加载本地模型"""
         if self._llm_in_ollama():   # 如果用的是ollama的模型如deepseek，则加载模型url
             try:
                 self.api_url = self.llm_config.get("local_model").get(self.local_llm_name, {}).get("api_url", "")
                 if self.api_url == "":
-                    raise ValueError("请配置本地模型url")
+                    raise ValueError("请配置本地模型 url")
             except Exception as e:
-                print(f"LLM配置错误：{e}")
+                self._log('load_local_model', f"LLM 配置错误：{e}")
                 raise
             return
 
@@ -58,9 +63,9 @@ class KeywordExtractor:
                 temperature=0.7,      # 低温度确保输出稳定
                 top_p=0.7,            # 提高多样性
             )
-            print(f"模型加载成功：{model_name}")
+            self._log('load_local_model', f"模型加载成功：{model_name}")
         except Exception as e:
-            print(f"模型加载失败：{model_name} - {e}")
+            self._log('load_local_model', f"模型加载失败：{model_name} - {e}")
             raise
 
     def extract(self, input_text) -> Dict[str, Any]:
@@ -73,7 +78,7 @@ class KeywordExtractor:
         else:
             raise ValueError(f"不支持的搜索模式：【{self.mod}】")
 
-        print(f"关键词提取结果：{result}")
+        self._log('extract', f"关键词提取结果：{result}")
         return result
 
 
@@ -143,11 +148,10 @@ class KeywordExtractor:
         请开始提取："""
 
         try:
-            print("========================")
-            print(f"LLM输入：")
-            print(prompt)
-            print("========================")
-            print("LLM正在生成提示词...")
+            self._log('llm_extract_local_llm', "========================")
+            self._log('llm_extract_local_llm', f"LLM 输入：\n{prompt}")
+            self._log('llm_extract_local_llm', "========================")
+            self._log('llm_extract_local_llm', "LLM 正在生成提示词...")
             start_time = time()
 
             # 访问所用本地模型，构造提示词输入给模型
@@ -179,9 +183,9 @@ class KeywordExtractor:
                 )
                 output = response['choices'][0]['text'].strip()
 
-            # 从模型输出响应中提取json结果
-            print(f"LLM响应结果：{output}")
-            print(f"LLM响应时间：{time() - start_time:.2f}秒")
+            # 从模型输出响应中提取 json 结果
+            self._log('llm_extract_local_llm', f"LLM 响应结果：{output}")
+            self._log('llm_extract_local_llm', f"LLM 响应时间：{time() - start_time:.2f}秒")
             # 解析响应结果
             import re
             json_match = re.search(r'\{.*\}', output, re.DOTALL)
@@ -189,14 +193,13 @@ class KeywordExtractor:
                 json_str = json_match.group()
                 json_str = json.loads(json_str)
                 json_str = self.filter_json(json_str)
-                print("========================")
-                print(f"LLM响应结果提取为json：{json_str}")
+                self._log('llm_extract_local_llm', f"LLM 响应结果提取为 json：{json_str}")
                 return json_str
             else:
-                print("无法解析LLM响应结果为json")
+                self._log('llm_extract_local_llm', "无法解析 LLM 响应结果为 json")
                 return {}
         except Exception as e:
-            print(f"LLM调用失败：{e}")
+            self._log('llm_extract_local_llm', f"LLM 调用失败：{e}")
             return {}
 
     def llm_extract_qwen(self, input_text : str) -> Dict[str, Any]:
@@ -263,12 +266,12 @@ class KeywordExtractor:
             else:
                 return {}
         except Exception as e:
-            print(f"qwen关键词提取失败：{e}")
+            self._log('llm_extract_qwen', f"qwen 关键词提取失败：{e}")
             return {}
 
     def _llm_in_ollama(self) -> bool:
         """检查配置的模型是否是本地ollama的模型"""
-        avaliable_models = ["deepseek-r1:1.5b","deepseek-r1:7b"]
+        avaliable_models = ["gemma3:1b"]
         return self.local_llm_name in avaliable_models
 
     def filter_json(self, json_dict : Dict[str, Any]) -> Dict[str, Any]:

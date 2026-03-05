@@ -2,17 +2,28 @@ import json
 import sys
 import os
 from typing import List, Dict, Any
+from io import BytesIO
 from PyQt5.QtWidgets import  (QApplication, QMainWindow, QTextEdit, QPushButton,
                               QVBoxLayout, QHBoxLayout, QWidget, QLabel, QScrollArea,
                               QGridLayout, QFrame, QDialog, QMessageBox, QSizePolicy,
                               QFileDialog)
 # 网络部分
-from PyQt5.QtCore import Qt, QUrl, pyqtSignal, QStandardPaths
+from PyQt5.QtCore import Qt, QUrl, pyqtSignal, QStandardPaths, QEvent, QSize
 from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QPixmap, QCursor
 
 from lib.Controller import *
-from lib.NetworkProxyDetection import *
+
+
+def _pil_to_qpixmap(img) -> QPixmap:
+    '''将PIL的Image转为QPixmap'''
+    buffer = BytesIO()
+    img.save(buffer, format='PNG')
+    pixmap = QPixmap()
+    pixmap.loadFromData(buffer.getvalue())
+    return pixmap
+
+
 
 class MainWindow(QMainWindow):
     image_load_finish_sgn = pyqtSignal(str, object)    # 类变量（定义在构造函数前，类的本质属性，所有实例共用同一个）
@@ -21,13 +32,13 @@ class MainWindow(QMainWindow):
         super().__init__()
         # 逻辑部分
         self.keywords = {}                          # 当用户输入需求描述并点击提取按钮时，记录提取得到的关键词字典
-        self.network_manager = QNetworkAccessManager()
         self.proxy = self.set_proxy()
-        self.image_load_finish_sgn.connect(self._on_image_load_finish)  # 绑定图片加载完成信号，
-        self.image_cache = {}                       # 图片缓存
+        # self.image_load_finish_sgn.connect(self._on_image_load_finish)  # 绑定图片加载完成信号，
+        # self.image_cache = {}                       # 图片缓存
         self.config = config.get("ui_config")
         self.default_save_path = config.get("default_save_picture_path", "")
         self.controller = Controller(config=config, feature_tags=feature_tags, proxy=self.proxy)
+        self.log_prefix = "MainWindow"
 
         # ui部件
         ### （上半部分）基础输入框
@@ -48,7 +59,9 @@ class MainWindow(QMainWindow):
         self.image_grid_column = self.config.get('image_grid_column', 5)
         self.init_ui()
 
-
+    def _log(self, function_name: str = "None", data: str = "-"):
+        '''格式化输出'''
+        print(f">> [{self.log_prefix}]-[{function_name}]: {data}")
 
     def init_ui(self):
         """初始化ui界面"""
@@ -140,7 +153,7 @@ class MainWindow(QMainWindow):
                 QNetworkProxy.setApplicationProxy(p)
         return proxy
 
-    def display_image(self, image_urls : List[str]):
+    def display_image(self, image_dtos : List[ImageInfoDTO]):
         """
         瀑布流显示图片
         调用时机：用户点击搜索按钮后，获取到图片urls时调用
@@ -152,40 +165,48 @@ class MainWindow(QMainWindow):
                 widget.deleteLater()
 
         # 添加新图片及对应控件
-        for idx, url in enumerate(image_urls):
+        for idx, dto in enumerate(image_dtos):
             # 创建标签，显示加载情况（"加载中..."）
             label = QLabel("加载中...")
-            label.setAlignment(Qt.AlignCenter)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             label.setStyleSheet("border: 1px solid gray; background-color: #f0f0f0;")
+            label.setMinimumSize(100, 100)
+            label.setMaximumSize(200, 200)
+            label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
             # 设置标签属性，用于后续识别
-            label.setProperty('image_url', url)
+            label.setProperty('image_url', dto.url)
+            label.dto = dto     # 在标签中保存图片dto，方便后续传递给图片信息子窗口
 
-            # 给标签添加点击事件
-            label.setCursor(Qt.PointingHandCursor)
+            # # 给标签添加点击事件
+            # label.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
 
             # 添加到对应网格位置
             row = idx // self.image_grid_column
             col = idx % self.image_grid_column
             self.image_grid_layout.addWidget(label, row, col)
 
-            # 启动图片加载流程
-            self._load_image_from_url(url, label)
+            label.installEventFilter(self)  # 安装事件过滤器，而不是绑定点击事件
 
-    def test_show_message(self, image_info : Dict[str, Any]):
-        """测试显示消息框"""
-        dialog = ImageDetailDialog(image_info)
-        dialog.exec_()
+            # 将图片信息与label绑定
+            self._load_image_from_url(dto, label)
 
-        # message_box = QMessageBox()
-        # message_box.setWindowTitle("提示")
-        # message_box.setText("这是一个测试消息框")
-        # message_box.exec_()
+    def eventFilter(self, obj, event):
+        '''事件过滤器，用于.display_image() 中处理图片点击事件'''
+        if event.type() == QEvent.Type.MouseButtonPress:
+            self._log('eventFilter', f"点击图片 [{obj.dto.url}]")
+            self.show_image_detail(obj.dto)
+            return True     # 事件已处理，不再传递给父类
+        return super().eventFilter(obj, event)
 
-    def show_image_detail(self, image_info: Dict[str, Any]):
-        """点击加载的图片，弹出详细信息"""
-        image_detail_dialog = ImageDetailDialog(self.config, self.default_save_path, image_info)
-        image_detail_dialog.exec_()
+    def show_image_detail(self, image_dto : ImageInfoDTO):
+        '''点击图片，弹出详细信息'''
+        try:
+            self._log('show_image_detail', f"打开图片详情对话框：[{image_dto.url}]")
+            image_detail_dialog = ImageDetailDialog(self.config, self.default_save_path, image_dto, self.controller.cache_manager)
+            image_detail_dialog.exec_()
+        except Exception as e:
+            self._log('show_image_detail', f"图片详细信息弹出失败：{e}")
 
     def display_current_keywords_combination(self, query: List[str]):
         """
@@ -199,59 +220,38 @@ class MainWindow(QMainWindow):
         key_text = ', '.join(query)
         self.keywords_combination_label.setText(key_text)
 
-    def _load_image_from_url(self, url : str, label : QLabel):
+    def _load_image_from_url(self, dto : ImageInfoDTO, label : QLabel):
         """
         从单个url加载图片，告诉图片需要传递给label
         调用时机：由display_image()调用
         """
-        # 若缓存中存在该图片，则直接显示
-        if url in self.image_cache:
-            label.setPixmap(self.image_cache[url])
-            return
+        # 若缓存中存在该图片，则直接显示（由controller内部调用的cache_manager.add_batch()保证返回的url都已加载进缓存，无需额外加载）
+        image = self.controller.cache_manager.get(dto.url)
 
-        # 创建网络请求
-        request = QNetworkRequest(QUrl(url))
-        reply = self.network_manager.get(request)
-        reply.finished.connect(lambda: self._on_download_finished(url, reply, label))
+        if not image:
+            success_url = self.controller.cache_manager.add_batch([dto.url])
+            if not success_url:
+                self._log('_load_image_from_url', f"错误！无法下载 url：[{dto.url}]")
+                label.setText("加载失败")
+                return
+            else:
+                image = self.controller.cache_manager.get(success_url[0])
 
-    def _on_download_finished(self, url : str, reply : QNetworkReply, label : QLabel):
-        """
-        图片下载完成的回调函数，从网络请求的响应中提取图片信息
-        调用时机：在_load_image_from_url()完成图片网络请求、获得响应时调用
-        """
-        if reply.error():
-            print(f"图片下载失败：{reply.error()}")
+        if image:
+            # 缩放图片
+            pixmap = _pil_to_qpixmap(image)
+            scaled_pixmap = pixmap.scaled(
+                label.size() - QSize(2, 2),     # 减去边框
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            label.setPixmap(scaled_pixmap)
+
+            # label.setPixmap(_pil_to_qpixmap(image))     # 将缓存中的 PIL 的 Image 图片转为 QPixmap，显示到 label 中
+            # label.mousePressEvent = lambda event, image_dto = dto: self.show_image_detail(image_dto)    # 给图片添加点击事件
+        else:
+            self._log('_load_image_from_url', f"错误！加载 url 失败：[{dto.url}]")
             label.setText("加载失败")
-            return
-
-        # 读取图片数据
-        data = reply.readAll()
-        pixmap = QPixmap()
-        pixmap.loadFromData(data)
-        # scaled_pixmap = pixmap.scaled(label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)    # 缩放
-
-        # 发射信号通知图片加载完成
-        self.image_load_finish_sgn.emit(url, pixmap)
-        reply.deleteLater()
-
-    def _on_image_load_finish(self, url : str, pixmap : QPixmap):
-        """
-        当接收到由_on_download_finished()发出的image_load_finish_sgn时，处理并显示加载好的图片pixmap
-        """
-        self.image_cache[url] = pixmap
-
-        # 遍历网格布局中的所有控件，找到对应url的label并设置图片
-        for i in reversed(range(self.image_grid_layout.count())):
-            widget = self.image_grid_layout.itemAt(i).widget()
-            if widget and isinstance(widget, QLabel):
-                # 获取控件关联的url
-                label_url = widget.property('image_url')
-                if label_url == url:
-                    scaled_pixmap = pixmap.scaled(widget.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                    widget.setPixmap(scaled_pixmap)
-                    image_info = {"url": url, "pixmap": pixmap}
-                    widget.mousePressEvent = lambda event, info=image_info: self.show_image_detail(info)
-                    break
 
     def _set_2row_button_enabled(self, enabled : bool):
         """设置row2的【重新生成】和【搜索】按钮是否允许点击。当未生成有效关键词组合时不可点击"""
@@ -299,41 +299,66 @@ class MainWindow(QMainWindow):
     def _on_search_btn_clicked(self):
         """按钮事件：点击搜索按钮"""
         try:
-            image_urls = self.controller.search_with_current_query()
-            if not image_urls:
+            self._log('_on_search_btn_clicked', "开始执行搜索...")
+            image_dtos: List[ImageInfoDTO] = self.controller.search_with_current_query()
+            self._log('_on_search_btn_clicked', f"搜索返回的图片URL数量: {len(image_dtos) if image_dtos else 0}")
+            if not image_dtos:
                 self.system_info_label.setText("无图片结果")
                 return
-            self.display_image(image_urls)
+            # print(f"准备显示图片，URL列表: {image_dtos[:3]}...")  # 只显示前3个URL
+            self.display_image(image_dtos)
         except Exception as e:
+            self._log('_on_search_btn_clicked', f"搜索过程中出现异常: {str(e)}")
             self.system_info_label.setText(f"图片搜索失败：{str(e)}")
 
 
 class ImageDetailDialog(QDialog):
     """图片详情对话框"""
 
-    def __init__(self, ui_config, default_save_path, image_info : Dict[str, Any]):
+    def __init__(self, ui_config, default_save_path, image_dto: ImageInfoDTO, cache_manager: CacheManager):
         super().__init__()
-        self.config = ui_config                     # 保存默认ui配置
+        self.log_prefix = "ImageDetailDialog"
+        self.config = ui_config                     # 保存默认 ui 配置
         self.default_save_path = default_save_path  # 保存图片默认路径
-        self.image_info = image_info
+        self.image_dto: ImageInfoDTO = image_dto    # 图片信息数据传输对象
+        self.cache_manager: CacheManager = cache_manager    # 图片缓存管理器
         layout = QHBoxLayout()                      # 主体水平布局
         self.setWindowTitle("图片详情")
 
         # 显示图片
-        self.original_pixmap = image_info.get('pixmap', None)
+        cached_image = self.cache_manager.get(self.image_dto.url)   # 获取缓存中的图片 PIL.Image
+        if cached_image:
+            self._log('__init__', "cached_image 已加载")
+            cached_image = _pil_to_qpixmap(cached_image)
+        else:
+            self._log('__init__', "cached_image 未命中")
+        self.original_image: Optional[QPixmap] = cached_image       # 原始图片 QPixmap
+        self._log('__init__', "self.original_image 加载完成")
         self.img = QLabel()
         self.img.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-        self.img.setAlignment(Qt.AlignCenter)
+        self.img.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.img.setMinimumSize(500, 400)
-        if self.original_pixmap and not self.original_pixmap.isNull():
-            self.img.setPixmap(self.original_pixmap)
+        self._log('__init__', "self.img 已创建，开始将图片存入 self.img")
+        if self.original_image and not self.original_image.isNull():
+            self.img.setPixmap(self.original_image)
+            self._log('__init__', "self.original_image 已加载进入 self.img，准备显示")
             self.update_image_display()
+        else:
+            download_image = self.cache_manager.get(self.image_dto.url)
+            if download_image:
+                self._log('__init__', "self.original_image 已重新下载")
+                download_image = _pil_to_qpixmap(download_image)
+                self.img.setPixmap(download_image)
+                self.update_image_display()
+            else:
+                self._log('__init__', f"self.original_image 错误！无法下载 url：[{self.image_dto.url}]")
+
         layout.addWidget(self.img, stretch=4)
 
         # 右侧图片信息
         right_layout = QVBoxLayout()
-        self.info_label = QLabel(image_info.get('url', '无图片url信息'))
-        print(f"正在查看图片详细信息，url: {self.info_label.text()}")
+        self.info_label = QLabel(self.image_dto.url)
+        self._log('__init__', f"正在查看图片详细信息，url: {self.info_label.text()}")
         self.info_label.setWordWrap(True)       # 自动换行
         self.info_label.setMaximumSize(300, 200)
         right_layout.addWidget(self.info_label, stretch=1)
@@ -346,9 +371,13 @@ class ImageDetailDialog(QDialog):
         self.setLayout(layout)
         self.resize(1000, 600)
 
+    def _log(self, function_name: str = "None", data: str = "-"):
+        '''格式化输出'''
+        print(f">> >> [{self.log_prefix}]-[{function_name}]: {data}")
+
     def get_filename_from_url(self):
         """从图片url中获取文件名"""
-        url = self.image_info.get('url', '')
+        url = self.image_dto.url
         if url:
             try:
                 from urllib.parse import urlparse
@@ -365,7 +394,7 @@ class ImageDetailDialog(QDialog):
         file_dialog = QFileDialog()
         file_dialog.setAcceptMode(QFileDialog.AcceptSave)
         file_dialog.setDefaultSuffix("png")
-        file_dialog.setNameFilter("图片文件 (*.png *.jpg *.jpeg *.bmp)")
+        file_dialog.setNameFilter("图片文件 (*.png *.jpg *.jpeg *.bmp *.webp)")
         file_dialog.setWindowTitle("保存图片")
 
         # 设置默认保存路径
@@ -378,32 +407,37 @@ class ImageDetailDialog(QDialog):
         filename = self.get_filename_from_url()
         file_dialog.selectFile(filename)
 
-        # 获取文件扩展名（图片格式，默认为png）
-        file_ext = os.path.splitext(filename)[1].lower()
-
         if file_dialog.exec_():
-            file_path = file_dialog.selectedFiles()[0]
-            if self.original_pixmap and not self.original_pixmap.isNull():
+            file_path = file_dialog.selectedFiles()[0]          # 获取文件路径
+            file_ext = os.path.splitext(file_path)[1].lower()   # 获取文件扩展名
+            self._log('save_image', f"开始保存图片：file_ext = [{file_ext}], file_path = [{file_path}]")
+            if self.original_image and not self.original_image.isNull():
                 if file_ext == ".jpg" or file_ext == ".jpeg":
-                    self.original_pixmap.save(file_path, "JPEG")
+                    self.original_image.save(file_path, "JPEG")
                 elif file_ext == ".bmp":
-                    self.original_pixmap.save(file_path, "BMP")
+                    self.original_image.save(file_path, "BMP")
                 elif file_ext == ".png":
-                    self.original_pixmap.save(file_path, "PNG")
+                    self.original_image.save(file_path, "PNG")
+                elif file_ext == ".webp":
+                    self.original_image.save(file_path, "WEBP")
                 else:
-                    print("不支持的图片格式")
+                    self._log('save_image', "不支持的图片格式")
             else:
-                print("图片为空")
+                self._log('save_image', "图片为空")
 
     def update_image_display(self):
         """随窗口大小更新图片显示"""
-        if self.original_pixmap and not self.original_pixmap.isNull():
-            scaled_pixmap = self.original_pixmap.scaled(
+        # self._log('update_image_display', f"开始更新图片显示 [{self.image_dto.url}]")
+        if self.original_image and not self.original_image.isNull():
+            # self._log('update_image_display', "图片有效，开始缩放")
+            scaled_pixmap = self.original_image.scaled(
                 self.img.size(),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
             )
             self.img.setPixmap(scaled_pixmap)
+        else:
+            self._log('update_image_display', "图片无效!!!")
 
     def resizeEvent(self, event):
         """窗口大小改变时，更新图片显示"""
