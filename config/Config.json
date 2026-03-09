@@ -6,6 +6,7 @@
     "windowsize_height": 600,
     "image_grid_column": 5
   },
+  "local_db_path": ".\\cache\\LocalDB_dir",
   "default_save_picture_path": ".\\cache",
   "translation_cache_path": ".\\cache\\translation_dictionary.json",
   "jieba_dictionary_cache_path": ".\\cache\\jieba.txt",

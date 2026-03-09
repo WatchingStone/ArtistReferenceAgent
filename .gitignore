@@ -2,10 +2,12 @@
 .env
 .idea/
 lib_backup
-test
-杂项
+test/test_db_dir/
+杂项/
 开发记录.md
+README - 副本.md
 model/
 项目备份/
 __pycache__/
 *.pyc
+cache/LocalDB_dir/

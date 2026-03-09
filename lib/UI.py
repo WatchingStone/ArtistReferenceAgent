@@ -1,22 +1,19 @@
-import json
+# /lib/UI.py
 import sys
-import os
-from typing import List, Dict, Any
-from io import BytesIO
 from PyQt5.QtWidgets import  (QApplication, QMainWindow, QTextEdit, QPushButton,
                               QVBoxLayout, QHBoxLayout, QWidget, QLabel, QScrollArea,
-                              QGridLayout, QFrame, QDialog, QMessageBox, QSizePolicy,
-                              QFileDialog)
+                              QGridLayout, QDialog, QMessageBox, QSizePolicy,
+                              QFileDialog, QCheckBox)
 # 网络部分
-from PyQt5.QtCore import Qt, QUrl, pyqtSignal, QStandardPaths, QEvent, QSize
-from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
-from PyQt5.QtGui import QPixmap, QCursor
+from PyQt5.QtCore import Qt, pyqtSignal, QStandardPaths, QEvent
+from PyQt5.QtGui import QPixmap
 
 from lib.Controller import *
+from lib.dto.ImageInfoDTO import ImageInfoDTO
 
 
 def _pil_to_qpixmap(img) -> QPixmap:
-    '''将PIL的Image转为QPixmap'''
+    """将PIL的Image转为QPixmap"""
     buffer = BytesIO()
     img.save(buffer, format='PNG')
     pixmap = QPixmap()
@@ -28,31 +25,36 @@ def _pil_to_qpixmap(img) -> QPixmap:
 class MainWindow(QMainWindow):
     image_load_finish_sgn = pyqtSignal(str, object)    # 类变量（定义在构造函数前，类的本质属性，所有实例共用同一个）
 
-    def __init__(self,  config : Dict[str, Any], feature_tags : Dict[str, Any]):
+    def __init__(self, controller, config: Dict[str, Any]):
         super().__init__()
-        # 逻辑部分
-        self.keywords = {}                          # 当用户输入需求描述并点击提取按钮时，记录提取得到的关键词字典
-        self.proxy = self.set_proxy()
-        # self.image_load_finish_sgn.connect(self._on_image_load_finish)  # 绑定图片加载完成信号，
-        # self.image_cache = {}                       # 图片缓存
-        self.config = config.get("ui_config")
-        self.default_save_path = config.get("default_save_picture_path", "")
-        self.controller = Controller(config=config, feature_tags=feature_tags, proxy=self.proxy)
+
         self.log_prefix = "MainWindow"
+        self.config = config.get("ui_config")
+        self.default_save_path = config.get("default_save_picture_path")
+        self.controller = controller
+        self.keywords = {}
+        self.search_mode = 'internet'
+        self._register_controller_callbacks()
 
         # ui部件
         ### （上半部分）基础输入框
         self.row1_layout = None                     # 第1行布局
         self.row2_layout = None                     # 第2行布局
-        self.row3_layout = None                     # 第3行布局（系统信息回显）
+        self.row3_layout = None                     # 第3行布局，搜索模式选择
+
         self.input_text_edit = None                 # 需求描述输入框
         self.extractor_keyword_btn = None           # 需求描述输入框对应的提取关键词按钮
         self.keywords_combination_static_label = None           # 静态标签："当前搜索所用关键词组合："QLabel
         self.keywords_label = None                  # 动态文本标签：当前搜索所用关键词组合的变量QLabel。可以直接用\n换行
         self.regeneration_keyword_btn = None        # 重新生成关键词组合按钮
+        self.import_local_dir_btn = None            # 导入本地文件夹按钮，将本地图片文件夹中的所有图片导入本地向量数据库中
         self.search_btn = None                      # 搜索按钮
-        self.system_info_label = None               # 系统信息回显
+        self.set_mode_internet_btn = None           # 设置搜索模式为：internet
+        self.set_mode_local_btn = None              # 设置搜索模式为：local
+
         ### （下半部分）瀑布流式多行多列图片显示
+        self.row4_layout = None                     # 第4行布局（系统信息回显）
+        self.system_info_label = None               # 系统信息回显
         self.scroll_area = None                     # 滚动区域
         self.scroll_widget = None                   # 滚动区域的内容
         self.image_grid_layout = None               # 瀑布流式多行多列图片显示
@@ -60,8 +62,8 @@ class MainWindow(QMainWindow):
         self.init_ui()
 
     def _log(self, function_name: str = "None", data: str = "-"):
-        '''格式化输出'''
-        print(f">> [{self.log_prefix}]-[{function_name}]: {data}")
+        """格式化输出"""
+        print(f">> >> [{self.log_prefix}]-[{function_name}]: {data}")
 
     def init_ui(self):
         """初始化ui界面"""
@@ -105,20 +107,36 @@ class MainWindow(QMainWindow):
         self.regeneration_keyword_btn = QPushButton("重新生成关键词组合")
         self.regeneration_keyword_btn.clicked.connect(self._on_regeneration_keyword_btn_clicked)
         self.regeneration_keyword_btn.setEnabled(False)                 # 先设置禁用
-        self.search_btn = QPushButton("搜索")                             # 搜索按钮
-        self.search_btn.setMinimumWidth(80)
-        self.search_btn.setEnabled(False)
-        self.search_btn.clicked.connect(self._on_search_btn_clicked)
+        self.import_local_dir_btn = QPushButton("导入本地目录")
+        self.import_local_dir_btn.setMinimumWidth(80)
+        self.import_local_dir_btn.setEnabled(True)
+        self.import_local_dir_btn.clicked.connect(self._on_import_local_dir_btn_clicked)
+
         self.row2_layout.addWidget(self.keywords_combination_static_label, stretch=1)
         self.row2_layout.addWidget(self.keywords_combination_label, stretch=2)
         self.row2_layout.addWidget(self.regeneration_keyword_btn, stretch=1)
-        self.row2_layout.addWidget(self.search_btn, stretch=1)
+        self.row2_layout.addWidget(self.import_local_dir_btn, stretch=1)
 
         # （上半部分row3）创建第3行布局QHBoxLayout：
         self.row3_layout = QHBoxLayout()
-        self.system_info_label = QLabel()
-        self.system_info_label.setMinimumWidth(200)
-        self.row3_layout.addWidget(self.system_info_label, stretch=1)
+        self.search_btn = QPushButton("搜索")                             # 搜索按钮
+        self.search_btn.setMinimumWidth(160)
+        self.search_btn.setEnabled(False)
+        self.search_btn.clicked.connect(self._on_search_btn_clicked)
+        self.set_mode_local_btn = QCheckBox("本地搜索")
+        self.set_mode_local_btn.setChecked(False)
+        self.set_mode_local_btn.setMinimumWidth(60)
+        self.set_mode_local_btn.setMaximumWidth(100)
+        self.set_mode_local_btn.clicked.connect(self._on_set_mode_local_btn_clicked)
+        self.set_mode_internet_btn = QCheckBox("网络搜索")
+        self.set_mode_internet_btn.setChecked(True)
+        self.set_mode_internet_btn.setMinimumWidth(60)
+        self.set_mode_internet_btn.setMaximumWidth(100)
+        self.set_mode_internet_btn.clicked.connect(self._on_set_mode_internet_btn_clicked)
+
+        self.row3_layout.addWidget(self.set_mode_internet_btn, stretch=1)
+        self.row3_layout.addWidget(self.set_mode_local_btn, stretch=1)
+        self.row3_layout.addWidget(self.search_btn, stretch=1)
 
         #  （下半部分）瀑布流式多行多列图片显示
         self.scroll_area = QScrollArea()                            # 创建滚动区域
@@ -131,33 +149,134 @@ class MainWindow(QMainWindow):
         self.scroll_widget.setLayout(self.image_grid_layout)
         main_layout.addWidget(self.scroll_area)
 
+        # （下半部分row4）创建第4行布局QHBoxLayout：
+        self.row4_layout = QHBoxLayout()
+        self.system_info_label = QLabel()
+        self.system_info_label.setMinimumWidth(200)
+        self.row4_layout.addWidget(self.system_info_label, stretch=1)
+
         # 将3个布局添加到主布局
         main_layout.addLayout(self.row1_layout, stretch=1)
         main_layout.addLayout(self.row2_layout, stretch=1)
         main_layout.addLayout(self.row3_layout, stretch=1)
-        main_layout.addWidget(self.scroll_area, stretch=6)
 
-    def set_proxy(self):
-        """设置代理"""
-        proxy = get_proxies()
-        if proxy and 'http' in proxy:
-            proxy_url = proxy['http']
-            # 将代理url解析并设置给QNetworkAccessManager
-            from PyQt5.QtNetwork import QNetworkProxy
-            proxy_parts = proxy_url.replace('http://', '').split(':')
-            if len(proxy_parts) == 2:
-                p = QNetworkProxy()
-                p.setType(QNetworkProxy.HttpProxy)
-                p.setHostName(proxy_parts[0])
-                p.setPort(int(proxy_parts[1]))
-                QNetworkProxy.setApplicationProxy(p)
-        return proxy
+        main_layout.addWidget(self.scroll_area, stretch=6)
+        main_layout.addLayout(self.row4_layout, stretch=1)
+
+    def _register_controller_callbacks(self):
+        """将 UI 方法注册为 Controller 的回调函数"""
+        self.controller._register_ui_callback('_on_keywords_extracted', self._on_keywords_extracted_DO_update_ui_keywords)
+        self.controller._register_ui_callback('_on_query_generated', self._on_query_generated_DO_show_current_query)
+        self.controller._register_ui_callback('_on_search_start', self._on_search_start_DO_show_loading)
+        self.controller._register_ui_callback('_on_images_load_finish', self._on_images_load_finish_DO_display_image)
+        self.controller._register_ui_callback('_on_error', self._on_error_DO_show_error)
+
+    # =================== 按钮事件处理函数（用户点击按钮，调用 Controller 处理，不直接更新ui） ===================
+    def _on_extractor_keyword_btn_clicked(self):
+        """按钮事件：点击分析关键词按钮"""
+        # 获取输入文本
+        input_text = self.input_text_edit.toPlainText()
+        if not input_text.strip():
+            self._log("on_extractor_keyword_btn_clicked", "输入文本为空")
+            return
+        self.controller.prepare_search_context(input_text)      # 交给Controller处理
+
+    def _on_regeneration_keyword_btn_clicked(self):
+        """按钮事件：点击重新生成关键词组合按钮"""
+        self.controller.get_next_query()
+
+    def _on_search_btn_clicked(self):
+        """按钮事件：点击搜索按钮"""
+        self.controller.search_with_current_query(mode=self.search_mode)
+
+    def _on_import_local_dir_btn_clicked(self):
+        """按钮事件：点击导入本地目录按钮"""
+        file_path = QFileDialog.getExistingDirectory(self, "选择目录", "")
+        if file_path:
+            self._log('_on_import_local_dir_btn_clicked', f"选中导入本地图片文件夹路径：{file_path}")
+            self.import_local_dir_btn.setEnabled(False)     # 禁用按钮，防止重复导入
+            self.import_local_dir_btn.setText("导入中...")
+
+            # 创建一个线程，将图片导入到数据库中
+            self.import_worker = ImportLocalDirWorker(self.controller, file_path)
+            self.import_worker.finished_sgn.connect(self._on_import_finished)
+            self.import_worker.start()
+        else:
+            self._log('_on_import_local_dir_btn_clicked', "导入本地图片文件夹路径无效！！！")
+
+    def _on_set_mode_local_btn_clicked(self):
+        """按钮事件：将搜索模式设置为【本地搜索local】"""
+        self.search_mode = 'local'
+        self.set_mode_local_btn.setChecked(True)
+        self.set_mode_internet_btn.setChecked(False)
+
+    def _on_set_mode_internet_btn_clicked(self):
+        """按钮事件：将搜索模式设置为【网络搜索internet】"""
+        self.search_mode = 'internet'
+        self.set_mode_internet_btn.setChecked(True)
+        self.set_mode_local_btn.setChecked(False)
+
+
+    # =================== 回调函数（由 Controller 调用，更新ui） =========================================================
+    def _on_keywords_extracted_DO_update_ui_keywords(self, keywords):
+        """回调：Controller 关键词已提取。保存关键词到本地变量，准备后续使用"""
+        self._log('_on_keywords_extracted', f"收到关键词：{list(keywords.keys())}")
+        self.keywords = keywords
+        # 注意：这里不更新按钮状态，等查询生成（_on_query_generated）后再更新
+
+    def _on_query_generated_DO_show_current_query(self, query):
+        """回调：Controller 生成查询条件。更新关键词组合显示"""
+        self._log('_on_query_generated', f"收到查询条件：{query}")
+        if query:
+            self.display_current_keywords_combination(query)
+            self._set_2row_button_enabled(True)
+        else:
+            self.keywords_combination_label.setText("无有效关键词")
+            self._set_2row_button_enabled(False)
+
+    def _on_search_start_DO_show_loading(self, data):
+        """后台开始搜索（data参数是作为回调函数传参格式占位用的）"""
+        self._log('_on_search_start', "开始搜索")
+        self.system_info_label.setText("正在搜索中...")
+
+    def _on_images_load_finish_DO_display_image(self, image_dtos : List[ImageInfoDTO]):
+        """后台完成图片加载，开始输出到UI中"""
+        self._log('_on_images_load_finish', f"后台完成图片加载，开始输出到UI中，接收到图片dto数量：{len(image_dtos)}")
+        self.system_info_label.setText("图片加载完成")
+        self.display_image(image_dtos)
+
+    def _on_error_DO_show_error(self, error_msg):
+        """发生错误"""
+        self._log('_on_error', f"收到错误：{error_msg}")
+        self.system_info_label.setText(f"错误：{error_msg}")
+        QMessageBox.critical(self, "错误", error_msg)
+
+    # =================== 其他工具函数 ============================================================================
+    def _set_2row_button_enabled(self, enabled : bool):
+        """设置row2的【重新生成】和【搜索】按钮是否允许点击。当未生成有效关键词组合时不可点击"""
+        self.regeneration_keyword_btn.setEnabled(enabled)
+        self.search_btn.setEnabled(enabled)
+
+    def display_current_keywords_combination(self, query: List[str]):
+        """
+        在self.keywords_combination_label中显示当前搜索所用关键词组合
+        """
+        if not query:
+            self.keywords_combination_label.setText("错误：无可用的关键词组合")
+            return
+
+        # 获取当前关键词组合并显示
+        key_text = ', '.join(query)
+        self.keywords_combination_label.setText(key_text)
+
 
     def display_image(self, image_dtos : List[ImageInfoDTO]):
         """
         瀑布流显示图片
         调用时机：用户点击搜索按钮后，获取到图片urls时调用
         """
+        self._log('display_image', f"开始显示图片，图片数量：{len(image_dtos)}")
+
         # 清除旧图片的显示
         for i in reversed(range(self.image_grid_layout.count())):
             widget = self.image_grid_layout.itemAt(i).widget()
@@ -188,11 +307,26 @@ class MainWindow(QMainWindow):
 
             label.installEventFilter(self)  # 安装事件过滤器，而不是绑定点击事件
 
+            # self._log('display_image', f"添加图片标签-位置：({row}, {col})，图片dto：{dto.to_dict()}")
+
             # 将图片信息与label绑定
-            self._load_image_from_url(dto, label)
+            self._load_image_from_cache(dto, label)
+
+    def _load_image_from_cache(self, dto: ImageInfoDTO, label: QLabel):
+        """
+        从缓存中加载图片
+        """
+        image = self.controller.cache_manager.get(dto)
+        if image:
+            qpixmap = _pil_to_qpixmap(image)
+            label.setPixmap(qpixmap.scaled(label.size(), Qt.AspectRatioMode.KeepAspectRatio))
+            # self._log("_load_image_from_cache", f"从缓存中加载图片成功：{dto.to_dict()}")
+        else:
+            label.setText("图片dto无效")
+            self._log("_load_image_from_cache", f"从缓存中加载图片失败！！！：{dto.to_dict()}")
 
     def eventFilter(self, obj, event):
-        '''事件过滤器，用于.display_image() 中处理图片点击事件'''
+        """事件过滤器，用于.display_image() 中处理图片点击事件"""
         if event.type() == QEvent.Type.MouseButtonPress:
             self._log('eventFilter', f"点击图片 [{obj.dto.url}]")
             self.show_image_detail(obj.dto)
@@ -200,117 +334,29 @@ class MainWindow(QMainWindow):
         return super().eventFilter(obj, event)
 
     def show_image_detail(self, image_dto : ImageInfoDTO):
-        '''点击图片，弹出详细信息'''
+        """点击图片，弹出详细信息"""
         try:
             self._log('show_image_detail', f"打开图片详情对话框：[{image_dto.url}]")
-            image_detail_dialog = ImageDetailDialog(self.config, self.default_save_path, image_dto, self.controller.cache_manager)
+            image_detail_dialog = ImageDetailDialog(
+                self.config,
+                self.default_save_path,
+                image_dto,
+                self.controller.cache_manager
+            )
             image_detail_dialog.exec_()
         except Exception as e:
             self._log('show_image_detail', f"图片详细信息弹出失败：{e}")
 
-    def display_current_keywords_combination(self, query: List[str]):
-        """
-        显示当前搜索所用关键词组合在self.keywords_combination_label中
-        """
-        if not query:
-            self.keywords_combination_label.setText("错误：无可用的关键词组合")
-            return
-
-        # 获取当前关键词组合并显示
-        key_text = ', '.join(query)
-        self.keywords_combination_label.setText(key_text)
-
-    def _load_image_from_url(self, dto : ImageInfoDTO, label : QLabel):
-        """
-        从单个url加载图片，告诉图片需要传递给label
-        调用时机：由display_image()调用
-        """
-        # 若缓存中存在该图片，则直接显示（由controller内部调用的cache_manager.add_batch()保证返回的url都已加载进缓存，无需额外加载）
-        image = self.controller.cache_manager.get(dto.url)
-
-        if not image:
-            success_url = self.controller.cache_manager.add_batch([dto.url])
-            if not success_url:
-                self._log('_load_image_from_url', f"错误！无法下载 url：[{dto.url}]")
-                label.setText("加载失败")
-                return
-            else:
-                image = self.controller.cache_manager.get(success_url[0])
-
-        if image:
-            # 缩放图片
-            pixmap = _pil_to_qpixmap(image)
-            scaled_pixmap = pixmap.scaled(
-                label.size() - QSize(2, 2),     # 减去边框
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            )
-            label.setPixmap(scaled_pixmap)
-
-            # label.setPixmap(_pil_to_qpixmap(image))     # 将缓存中的 PIL 的 Image 图片转为 QPixmap，显示到 label 中
-            # label.mousePressEvent = lambda event, image_dto = dto: self.show_image_detail(image_dto)    # 给图片添加点击事件
+    def _on_import_finished(self, success, msg):
+        """线程结束时，完成导入"""
+        self._log('_on_import_finished', "导入完成")
+        self.import_local_dir_btn.setEnabled(True)
+        self.import_local_dir_btn.setText("导入本地目录")
+        if success:
+            self.system_info_label.setText(f"导入成功：{msg}")
         else:
-            self._log('_load_image_from_url', f"错误！加载 url 失败：[{dto.url}]")
-            label.setText("加载失败")
-
-    def _set_2row_button_enabled(self, enabled : bool):
-        """设置row2的【重新生成】和【搜索】按钮是否允许点击。当未生成有效关键词组合时不可点击"""
-        self.regeneration_keyword_btn.setEnabled(enabled)
-        self.search_btn.setEnabled(enabled)
-
-    def _on_extractor_keyword_btn_clicked(self):
-        """按钮事件：点击分析关键词按钮"""
-        # 获取输入文本
-        input_text = self.input_text_edit.toPlainText()
-        if not input_text.strip():
-            return
-
-        try:
-            # 使用Controller准备搜索上下文
-            keywords, queries = self.controller.prepare_search_context(input_text)
-            self.keywords = keywords
-
-            # 获取第一组查询关键词
-            first_query = self.controller.get_first_query()
-            if first_query:
-                self.display_current_keywords_combination(first_query)
-                self._set_2row_button_enabled(True)
-            else:
-                self.keywords_combination_label.setText("无有效关键词")
-                self._set_2row_button_enabled(False)
-        except Exception as e:
-            self.keywords_combination_label.setText(f"提取关键词出错：{str(e)}")
-
-    def _on_regeneration_keyword_btn_clicked(self):
-        """按钮事件：点击重新生成关键词组合按钮"""
-        try:
-            # 获取下一组查询关键词
-            next_query = self.controller.get_next_query()
-            if next_query:
-                self.display_current_keywords_combination(next_query)
-                self._set_2row_button_enabled(True)
-            else:
-                self.keywords_combination_label.setText("无法生成新的关键词组合")
-                self._set_2row_button_enabled(False)
-        except Exception as e:
-            self.keywords_combination_label.setText(f"重新生成关键词组合失败：{str(e)}")
-            return
-
-    def _on_search_btn_clicked(self):
-        """按钮事件：点击搜索按钮"""
-        try:
-            self._log('_on_search_btn_clicked', "开始执行搜索...")
-            image_dtos: List[ImageInfoDTO] = self.controller.search_with_current_query()
-            self._log('_on_search_btn_clicked', f"搜索返回的图片URL数量: {len(image_dtos) if image_dtos else 0}")
-            if not image_dtos:
-                self.system_info_label.setText("无图片结果")
-                return
-            # print(f"准备显示图片，URL列表: {image_dtos[:3]}...")  # 只显示前3个URL
-            self.display_image(image_dtos)
-        except Exception as e:
-            self._log('_on_search_btn_clicked', f"搜索过程中出现异常: {str(e)}")
-            self.system_info_label.setText(f"图片搜索失败：{str(e)}")
-
+            self.system_info_label.setText(f"导入失败：{msg}")
+            QMessageBox.critical(self, "错误：导入失败：", msg)
 
 class ImageDetailDialog(QDialog):
     """图片详情对话框"""
@@ -318,15 +364,15 @@ class ImageDetailDialog(QDialog):
     def __init__(self, ui_config, default_save_path, image_dto: ImageInfoDTO, cache_manager: CacheManager):
         super().__init__()
         self.log_prefix = "ImageDetailDialog"
-        self.config = ui_config                     # 保存默认 ui 配置
-        self.default_save_path = default_save_path  # 保存图片默认路径
-        self.image_dto: ImageInfoDTO = image_dto    # 图片信息数据传输对象
+        self.config = ui_config                             # 保存默认 ui 配置
+        self.default_save_path = default_save_path          # 保存图片默认路径
+        self.image_dto: ImageInfoDTO = image_dto            # 图片信息数据传输对象
         self.cache_manager: CacheManager = cache_manager    # 图片缓存管理器
-        layout = QHBoxLayout()                      # 主体水平布局
+        layout = QHBoxLayout()                              # 主体水平布局
         self.setWindowTitle("图片详情")
 
         # 显示图片
-        cached_image = self.cache_manager.get(self.image_dto.url)   # 获取缓存中的图片 PIL.Image
+        cached_image = self.cache_manager.get(self.image_dto)       # 获取缓存中的图片 PIL.Image
         if cached_image:
             self._log('__init__', "cached_image 已加载")
             cached_image = _pil_to_qpixmap(cached_image)
@@ -344,7 +390,7 @@ class ImageDetailDialog(QDialog):
             self._log('__init__', "self.original_image 已加载进入 self.img，准备显示")
             self.update_image_display()
         else:
-            download_image = self.cache_manager.get(self.image_dto.url)
+            download_image = self.cache_manager.get(self.image_dto)
             if download_image:
                 self._log('__init__', "self.original_image 已重新下载")
                 download_image = _pil_to_qpixmap(download_image)
@@ -362,6 +408,7 @@ class ImageDetailDialog(QDialog):
         self.info_label.setWordWrap(True)       # 自动换行
         self.info_label.setMaximumSize(300, 200)
         right_layout.addWidget(self.info_label, stretch=1)
+
         ### 右侧保存按钮
         save_btn = QPushButton("保存图片")
         save_btn.clicked.connect(self.save_image)
@@ -372,8 +419,8 @@ class ImageDetailDialog(QDialog):
         self.resize(1000, 600)
 
     def _log(self, function_name: str = "None", data: str = "-"):
-        '''格式化输出'''
-        print(f">> >> [{self.log_prefix}]-[{function_name}]: {data}")
+        """格式化输出"""
+        print(f">> >> >> [{self.log_prefix}]-[{function_name}]: {data}")
 
     def get_filename_from_url(self):
         """从图片url中获取文件名"""
@@ -444,6 +491,25 @@ class ImageDetailDialog(QDialog):
         super().resizeEvent(event)
         self.update_image_display()
 
+
+from PyQt5.QtCore import QThread, pyqtSignal
+
+class ImportLocalDirWorker(QThread):
+    finished_sgn = pyqtSignal(bool, str)    # 线程结束信号, 参数为成功与否，以及错误信息
+
+    def __init__(self, controller: Controller, local_dir: str):
+        super().__init__()
+        self.controller = controller
+        self.local_dir = local_dir
+
+    def run(self):
+        print("【子线程】：开始导入本地图片目录")
+        try:
+            self.controller.import_local_image_dir(self.local_dir)
+            self.finished_sgn.emit(True, "")
+        except Exception as e:
+            self.finished_sgn.emit(False, str(e))
+
 if __name__ == '__main__':
     with open('config/Config.json', 'r', encoding='utf-8') as f:
         config = json.load(f)
@@ -452,7 +518,8 @@ if __name__ == '__main__':
 
     app = QApplication(sys.argv)
 
-    mainwindow = MainWindow(config=config, feature_tags=feature_tags)
+    controller = Controller(config=config, feature_tags=feature_tags)
+    mainwindow = MainWindow(controller=controller, config=config)
     mainwindow.show()
 
     sys.exit(app.exec_())   # 启动事件循环

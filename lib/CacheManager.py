@@ -1,4 +1,6 @@
+# /lib/CacheManager.py
 # 缓存管理器。主要缓存图片数据，那些相似度得分低于阈值的图片不必缓存。设计一个单独的类有助于添加LRU等缓存管理功能
+import os
 from typing import Optional, Dict, List
 from PIL import Image
 import requests
@@ -6,6 +8,7 @@ from io import BytesIO
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed     # 并发线程池
 from collections import OrderedDict                                 # LRU缓存
+from lib.dto.ImageInfoDTO import ImageInfoDTO
 
 class CacheManager:
     '''单例模式，缓存各类数据，主要是图片数据'''
@@ -80,7 +83,7 @@ class CacheManager:
             return None
 
     # ================== 对外接口 ==================
-    def get(self, url: str) -> Optional[Image.Image]:
+    def get_by_url(self, url: str) -> Optional[Image.Image]:
         '''从缓存中获取图片'''
         # 检查内存
         self._log('get', f"开始获取图片[{url}]")
@@ -98,6 +101,43 @@ class CacheManager:
         self._log('get', f"图片下载失败")
 
         return None
+
+    def get(self, dto: ImageInfoDTO) -> Optional[Image.Image]:
+        '''传入图片dto，从缓存中获取图片'''
+        # 先检查dto中的local_path是否有效
+        local_path = dto.local_path
+        if local_path is not None and os.path.exists(local_path):
+            # 检查内存中是否存在该图片
+            img = self._get_from_cache(local_path)
+            if img:
+                return img
+            else:
+                # 若不在缓存中，则从本地路径加载
+                img = Image.open(local_path)
+                if img:
+                    self._log('get', f"从本地路径加载成功")
+                    self._add_to_cache(local_path, img)
+                    return img
+                self._log('get', f"从本地路径加载失败")
+                return None
+        else:
+            url = dto.url
+            # 检查内存
+            self._log('get', f"开始获取图片[{url}]")
+            img = self._get_from_cache(url)
+            if img:
+                return img
+            self._log('get', f"图片不在缓存中，开始下载")
+
+            # 若不在缓存中，则下载
+            img = self._download_image(url)
+            if img:
+                self._log('get', f"图片下载成功")
+                self._add_to_cache(url, img)
+                return img
+            self._log('get', f"图片下载失败")
+
+            return None
 
 
     def add_batch(self, url_list: List[str]) -> List[str]:

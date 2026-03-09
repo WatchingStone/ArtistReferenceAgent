@@ -1,8 +1,9 @@
+# /lib/VisualEvaluator.py
 # 视觉评估模块，调用clip模型，检查后台搜索的图片结果是否匹配用户输入的原始关键词，以得分的形式过滤低分结果
 # 如果优质结果过少，则通知模型上一步搜索结果质量差，需要调整搜索关键词组合
 import json
 import os.path
-from typing import List
+from typing import List, Optional
 from lib.dto.ImageInfoDTO import ImageInfoDTO
 import numpy as np
 
@@ -20,7 +21,7 @@ class VisualEvaluator:
             cls._instance.initialized = False
         return cls._instance
 
-    def __init__(self, cache_manager):
+    def __init__(self, cache_manager=None, config_path='config/Resource_config.json'):  # 允许cache_manager默认为None，是为了方便LocalImageLoader的单独调用
         if self.initialized:    # 避免重复加载
             return
 
@@ -28,7 +29,7 @@ class VisualEvaluator:
         self.cache_manager = cache_manager      # 图片缓存管理器
         self.batch_size = 8                     # 批处理图片数量
 
-        resource_config = json.load(open('config/Resource_config.json', 'r', encoding='utf-8'))
+        resource_config = json.load(open(config_path, 'r', encoding='utf-8'))
         model_dir = resource_config['model_dir']
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         # self.model = CLIPModel.from_pretrained(model_dir).to(self.device)
@@ -36,13 +37,17 @@ class VisualEvaluator:
         try:
             # 读取 Taiyi 中文 text encoder
             text_model_dir = os.path.join(model_dir, resource_config['text_model_id'])
+            # text_model_dir = os.path.join("../model", resource_config['text_model_id'])
+            self._log('__init__', f"文本处理模型读取路径： {text_model_dir}")
             self.text_tokenizer = BertTokenizer.from_pretrained(text_model_dir, local_files_only=True)
             # self.text_encoder = BertForSequenceClassification.from_pretrained(text_model_dir, local_files_only=True).eval()
             self._log('__init__', "加载文本处理模型成功")
 
             # 读取 clip 的 image encoder
             image_model_dir = os.path.join(model_dir, resource_config['image_model_id'])
-            self.processor = CLIPProcessor.from_pretrained(image_model_dir, local_files_only=True)
+            # image_model_dir = os.path.join('../model', resource_config['image_model_id'])
+            self._log('__init__', f"图片处理模型读取路径： {image_model_dir}")
+            self.processor = CLIPProcessor.from_pretrained(image_model_dir, local_files_only=True )
             self.model = CLIPModel.from_pretrained(image_model_dir, local_files_only=True).to(self.device).eval()
             self._log('__init__', "加载图片处理模型成功")
 
@@ -69,7 +74,7 @@ class VisualEvaluator:
         valid_image_dtos = []
         for url in image_url_list:
             try:
-                image = self.cache_manager.get(url)
+                image = self.cache_manager.get_by_url(url)
                 if image:
                     valid_images.append(image)
                     valid_image_dtos.append(ImageInfoDTO(url=url))
@@ -136,3 +141,120 @@ class VisualEvaluator:
         return result
 
 
+    def get_text_feature(self, text: str) -> List[float]:
+        '''获取文本的向量表示'''
+        self._log('get_text_feature', f"正在提取文本特征 text = {text}")
+        if isinstance(text, list):
+            text = ",".join(text)
+
+        with torch.no_grad():
+            try:
+                text_token = self.text_tokenizer(text, return_tensors='pt', padding=True).to(self.device)
+                text_token = {k: v for k, v in text_token.items() if k != 'token_type_ids'}
+                text_features = self.model.get_text_features(**text_token)
+                text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+                return text_features.cpu().numpy().flatten().tolist()
+            except Exception as e:
+                self._log('get_text_feature', f"获取文本特征失败：{str(e)}")
+                return []
+
+    def get_image_feature(self, image_dto: ImageInfoDTO) -> List[float]:
+        '''传入图片dto，获取图片的向量表示'''
+
+        with torch.no_grad():
+            if image_dto.local_path is not None:            # 读取本地图片
+                try:
+                    image = Image.open(image_dto.local_path)
+                    image_token = self.processor(image=image, return_tensors='pt', padding=True).to(self.device)
+                    image_features = self.model.get_image_features(**image_token)
+                    image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+                    return image_features.cpu().numpy().flatten().tolist()
+                except Exception as e:
+                    self._log('get_image_feature', f"获取图片特征失败：{str(e)}")
+                    return []
+            else:
+                if image_dto.url is not None:
+                    try:
+                        image = self.cache_manager.get(image_dto.url)
+                        if image:
+                            image_token = self.processor(image=image, return_tensors='pt', padding=True).to(self.device)
+                            image_features = self.model.get_image_features(**image_token)
+                            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+                            return image_features.cpu().numpy().flatten().tolist()
+                        else:
+                            self._log('get_image_feature', f"图片未找到 [{image_dto.url}]")
+                            return []
+                    except Exception as e:
+                        self._log('get_image_feature', f"获取图片特征失败：{str(e)}")
+                        return []
+                else:
+                    self._log('get_image_feature', f"图片dto.url为空")
+                    return []
+
+    def get_image_feature_by_batch(self, image_dtos: List[ImageInfoDTO], batch_size: int = 8, local_db = None) -> Optional[List[List[float]]]:
+        '''（仅考虑图片的本地路径，不考虑当场下载）传入图片dto批处理列表，获取批处理图片的向量表示（或者直接存入本地数据集）'''
+        self._log('get_image_feature_by_batch', f"开始批量处理图片，共 [{len(image_dtos)}] 张")
+
+        # 过滤原始列表中的有效本地路径
+        # image_dtos = [image_dto for image_dto in image_dtos if image_dto.local_path is not None and os.path.exists(image_dto.local_path)]
+        dtos = []
+        for image_dto in image_dtos:
+            self._log('get_image_feature_by_batch', f"image_dto.local_path = {image_dto.local_path}")
+            if image_dto.local_path is not None and os.path.exists(image_dto.local_path):
+                dtos.append(image_dto)
+        image_dtos = dtos
+
+        # 批处理
+        dto_size = len(image_dtos)
+        result = []
+        success_cnt = 0
+
+        try:
+            with torch.no_grad():
+                for i in range(0, dto_size, batch_size):
+                    batch_dtos = image_dtos[i : min(i + batch_size, dto_size)]
+                    batch_images = [Image.open(dto.local_path) for dto in batch_dtos]   # 读取图片
+
+                    try:
+                        batch_image_tokens = self.processor(images=batch_images, return_tensors='pt', padding=True).to(self.device) # 提取token
+                        for img in batch_images:    # 手动释放内存，关闭图片流
+                            img.close()
+                        del batch_images
+
+                        batch_image_features = self.model.get_image_features(**batch_image_tokens)
+                        del batch_image_tokens
+                        batch_image_features = batch_image_features / batch_image_features.norm(dim=-1, keepdim=True)
+
+                        # 将结果添加进result中或直接添加进数据库
+                        if local_db:
+                            for j, feature in enumerate(batch_image_features):
+                                feature_shape = feature.shape
+                                self._log('get_image_feature_by_batch', f"图片 [{batch_dtos[j].local_path}] 特征向量大小 = {feature_shape}")
+                                temp = feature.cpu().numpy().flatten().tolist()
+                                self._log('get_image_feature_by_batch', f"图片 [{batch_dtos[j].local_path}] 特征向量前几项 = {temp[:5]}")
+                                ok: bool = local_db.add_image(batch_dtos[j], temp)
+                                if ok:
+                                    success_cnt += 1
+                        else:
+                            for j, feature in enumerate(batch_image_features):
+                                result.append(feature.cpu().numpy().flatten().tolist())
+
+                        # （如果可用）释放GPU批缓存
+                        if torch.cuda.is_available():
+
+                            torch.cuda.empty_cache()
+
+                    except Exception as e:
+                        self._log('get_image_feature_by_batch', f"批量获取图片特征失败：{str(e)}")
+
+        except Exception as e:
+            self._log('get_image_feature_by_batch', f"批量获取图片特征失败：{str(e)}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+        if local_db:
+            self._log('get_image_feature_by_batch', f"批量获取图片特征成功，已直接存入本地数据库，成功数量为 [{success_cnt}] / [{dto_size}]")
+            return None
+        else:
+            return result

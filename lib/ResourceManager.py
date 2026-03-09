@@ -1,8 +1,8 @@
+# /lib/ResourceManager.py
 # 安装各类资源，主要是huggingface 的 clip 模型
 import json
-from huggingface_hub import snapshot_download, HfApi
+from huggingface_hub import snapshot_download
 import os
-import sys
 from lib.NetworkProxyDetection import get_proxies
 
 
